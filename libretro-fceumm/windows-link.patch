@@ -1,0 +1,15 @@
+diff --git a/Makefile.libretro b/Makefile.libretro
+index 5b90d40..2451c38 100644
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -816,7 +816,9 @@ else
+ 	$(AR) rcs $@ $(OBJECTS)
+ endif
+ else
+-	$(LD) $(LINKOUT)$@ $(SHARED) $(OBJECTS) $(LDFLAGS) $(LIBS)
++	$(file >$@.rsp,$(OBJECTS))
++	$(LD) $(LINKOUT)$@ $(SHARED) @$@.rsp $(LDFLAGS) $(LIBS)
++	@rm -f $@.rsp
+ endif
+ 
+ %.o: %.c

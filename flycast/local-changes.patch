@@ -1,0 +1,258 @@
+diff --git a/Makefile.common b/Makefile.common
+index 46ce06f..fdf52e6 100644
+--- a/Makefile.common
++++ b/Makefile.common
+@@ -458,7 +458,19 @@ SOURCES_CXX += $(CORE_DIR)/core/libretro/libretro.cpp \
+ # compiles these libretro-common sources; building them again would duplicate
+ # symbols at link time. The headers stay -- they now match current upstream, so
+ # the declarations agree with the objects RetroArch provides.
+-ifneq ($(STATIC_LINKING), 1)
++# baske: BASKE_LIBRETRO_COMMON=1 forces them in anyway. Our frontend is NOT RetroArch:
++# we relink this .a as a standalone .so, so nobody brings libretro-common from outside
++# and there is no risk of duplicate symbols. Without it the .so is left with ~40
++# unresolved symbols (filestream_*, path_*, retro_dirent_*, slock_*, scond_*,
++# sthread_*) and the loader fails to load it.
++NEED_LR_COMMON = 0
++ifeq ($(BASKE_LIBRETRO_COMMON), 1)
++	NEED_LR_COMMON = 1
++else ifneq ($(STATIC_LINKING), 1)
++	NEED_LR_COMMON = 1
++endif
++
++ifeq ($(NEED_LR_COMMON), 1)
+ SOURCES_C += $(LIBRETRO_COMM_DIR)/memmap/memalign.c \
+ 					$(LIBRETRO_COMM_DIR)/file/file_path.c \
+ 					$(LIBRETRO_COMM_DIR)/file/file_path_io.c \
+@@ -480,7 +492,7 @@ endif
+ 
+ ifeq ($(NO_THREADS), 1)
+ else
+-ifneq ($(STATIC_LINKING), 1)
++ifeq ($(NEED_LR_COMMON), 1)
+ 	SOURCES_C += $(LIBRETRO_COMM_DIR)/rthreads/rthreads.c
+ endif
+ endif
+diff --git a/core/hw/mem/_vmem.cpp b/core/hw/mem/_vmem.cpp
+index 6a8b342..3c99257 100644
+--- a/core/hw/mem/_vmem.cpp
++++ b/core/hw/mem/_vmem.cpp
+@@ -479,19 +479,44 @@ bool _vmem_reserve(void)
+ 		virt_ram_base = 0;
+ 
+ 		// Allocate it all and initialize it.
++		// baske: NONE of these allocations checked its result, and the first one asks
++		// for ~128 MB CONTIGUOUS (fpcb is RAM_SIZE_MAX/2 pointers). If it fails, the
++		// crash turns up much later and looks unrelated: a NULL inside
++		// _vmem_WriteMem32 when the SH4 writes memory. Each one is logged.
+ 		p_sh4rcb = (Sh4RCB*)malloc_pages(sizeof(Sh4RCB));
++		NOTICE_LOG(VMEM, "[baske] p_sh4rcb=%p (%zu MB)", (void*)p_sh4rcb, sizeof(Sh4RCB) >> 20);
++		if (p_sh4rcb == NULL) { ERROR_LOG(VMEM, "[baske] FALLO la reserva de Sh4RCB"); return false; }
+ #if FEAT_SHREC != DYNAREC_NONE
+ 		bm_vmem_pagefill((void**)p_sh4rcb->fpcb, sizeof(p_sh4rcb->fpcb));
+ #endif
+ 
+ 		mem_b.size = RAM_SIZE;
+ 		mem_b.data = (u8*)malloc_pages(RAM_SIZE);
++		NOTICE_LOG(VMEM, "[baske] mem_b=%p", (void*)mem_b.data);
++		if (mem_b.data == NULL) { ERROR_LOG(VMEM, "[baske] FALLO la reserva de mem_b"); return false; }
+ 
+ 		vram.size = VRAM_SIZE;
+ 		vram.data = (u8*)malloc_pages(VRAM_SIZE);
++		NOTICE_LOG(VMEM, "[baske] vram=%p (&vram=%p)", (void*)vram.data, (void*)&vram);
++		if (vram.data == NULL) { ERROR_LOG(VMEM, "[baske] FALLO la reserva de vram"); return false; }
+ 
+ 		aica_ram.size = ARAM_SIZE;
+ 		aica_ram.data = (u8*)malloc_pages(ARAM_SIZE);
++		NOTICE_LOG(VMEM, "[baske] aica_ram=%p", (void*)aica_ram.data);
++		if (aica_ram.data == NULL) { ERROR_LOG(VMEM, "[baske] FALLO la reserva de aica_ram"); return false; }
++
++		// baske: a write test. The crash on the Switch is a Data Abort writing to a
++		// VALID address inside mem_b (mem_b+0xc0a00, say), which means the page is not
++		// mapped. This tells the two cases apart: if it fails HERE the reservation is
++		// lying (it handed back a pointer with no memory behind it); if it passes, the
++		// reservation is fine and something unmaps it LATER.
++		NOTICE_LOG(VMEM, "[baske] tocando %u MB de mem_b...", (u32)(RAM_SIZE >> 20));
++		for (size_t off = 0; off < RAM_SIZE; off += 4096)
++			((volatile u8*)mem_b.data)[off] = 0;
++		NOTICE_LOG(VMEM, "[baske] mem_b OK: %u MB escribibles", (u32)(RAM_SIZE >> 20));
++		for (size_t off = 0; off < sizeof(Sh4RCB); off += 4096)
++			((volatile u8*)p_sh4rcb)[off] = ((volatile u8*)p_sh4rcb)[off];
++		NOTICE_LOG(VMEM, "[baske] p_sh4rcb OK: %u MB accesibles", (u32)(sizeof(Sh4RCB) >> 20));
+ 	}
+ 	else {
+ 		NOTICE_LOG(VMEM, "Info: nvmem is enabled, with addr space of size %s", vmemstatus == MemType4GB ? "4GB" : "512MB");
+diff --git a/core/hw/pvr/pvr_mem.cpp b/core/hw/pvr/pvr_mem.cpp
+index e08b98b..05ed708 100644
+--- a/core/hw/pvr/pvr_mem.cpp
++++ b/core/hw/pvr/pvr_mem.cpp
+@@ -204,6 +204,17 @@ void DYNACALL pvr_write_area1(u32 addr, T data)
+ 		INFO_LOG(MEMORY, "%08x: 8-bit VRAM writes are not possible", addr);
+ 		return;
+ 	}
++	// baske (diagnostics, once only): the crash is a Data Abort on the str below, with
++	// a base pointer that is NOT the one _vmem_reserve reserved. We print where the
++	// global lives and what is inside it, to see whether something overwrote it later.
++	{
++		static bool loggedOnce = false;
++		if (!loggedOnce) {
++			loggedOnce = true;
++			NOTICE_LOG(MEMORY, "[baske] &vram=%p vram.data=%p size=%u",
++			           (void*)&vram, (void*)vram.data, (unsigned)vram.size);
++		}
++	}
+ 	u32 vaddr = addr & VRAM_MASK;
+ 	if (vaddr >= fb_watch_addr_start && vaddr < fb_watch_addr_end)
+ 		fb_dirty = true;
+diff --git a/core/hw/sh4/dyna/driver.cpp b/core/hw/sh4/dyna/driver.cpp
+index 697386c..d332c7a 100644
+--- a/core/hw/sh4/dyna/driver.cpp
++++ b/core/hw/sh4/dyna/driver.cpp
+@@ -471,6 +471,11 @@ static void recSh4_Init(void)
+ 	// Prepare some pointer to the pre-allocated code cache:
+ 	void *candidate_ptr = (void*)(((unat)SH4_TCB + 4095) & ~4095);
+ 
++	// baske: the recompiler, out loud. Without these lines its start-up is SILENT: if
++	// the JIT block cannot be had, the SH4 runs nothing and what you see is a black
++	// screen that ignores the buttons -- from outside, indistinguishable from video.
++	printf("[sh4] preparando el bloque JIT (%u bytes)...\n",
++	       (unsigned)(CODE_SIZE + TEMP_CODE_SIZE));
+ 	// Call the platform-specific magic to make the pages RWX
+ 	CodeCache = NULL;
+ 	#ifdef FEAT_NO_RWX_PAGES
+@@ -481,6 +486,7 @@ static void recSh4_Init(void)
+ 	// Ensure the pointer returned is non-null
+ 	verify(CodeCache != NULL);
+ 
++	printf("[sh4] bloque JIT listo: CodeCache=%p\n", (void*)CodeCache);
+ 	memset(CodeCache, 0xFF, CODE_SIZE + TEMP_CODE_SIZE);
+ 	TempCodeCache = CodeCache + CODE_SIZE;
+ 	ngen_init();
+diff --git a/core/libretro-common/glsm/glsm.c b/core/libretro-common/glsm/glsm.c
+index 32d599a..397259f 100644
+--- a/core/libretro-common/glsm/glsm.c
++++ b/core/libretro-common/glsm/glsm.c
+@@ -2778,7 +2778,16 @@ static void glsm_state_bind(void)
+       }
+    }
+ 
+-   glBindFramebuffer(RARCH_GL_FRAMEBUFFER, default_framebuffer);
++   /* baske: IT IS ASKED AGAIN, the cached value is not used.
++    *
++    * default_framebuffer is captured ONCE, in glsm_state_setup(), which runs inside
++    * retro_load_game. In RetroArch that is enough, because the frontend's FBO already
++    * exists by then. Here the FBO is created on the first frame (it needs the GL
++    * context and the core's geometry), so at that moment the answer is 0 -- the screen.
++    * With that 0 cached, flycast draws to the default framebuffer and we then clear it
++    * and copy an empty FBO over the top: a black screen with sound. The call is a
++    * question to a frontend function, and it costs nothing. */
++   glBindFramebuffer(RARCH_GL_FRAMEBUFFER, glsm_get_current_framebuffer());
+ 
+    if (gl_state.blendfunc.used)
+       glBlendFunc(
+diff --git a/core/libretro/common.cpp b/core/libretro/common.cpp
+index ea24223..c97eb4e 100644
+--- a/core/libretro/common.cpp
++++ b/core/libretro/common.cpp
+@@ -297,7 +297,12 @@ static void sigill_handler(int sn, siginfo_t * si, void *segfault_ctx)
+ //#define LOG_SIGHANDLER
+ 
+ #ifdef HAVE_LIBNX
+-extern "C" char __start__;
++// baske: __start__ is defined by libnx's linker script when it builds a .nro. Our core
++// is loaded as a dynamic .so, so that symbol does NOT exist and the loader failed with
++// "unresolved external symbol: __start__". It is only used to log the base of .text
++// after a segfault, so any address INSIDE the module will do: we use a function of our
++// own, which lives in the core's .text.
++static void nx_module_anchor(void) { }
+ #endif // HAVE_LIBNX
+ 
+ #if !defined(TARGET_NO_EXCEPTIONS)
+@@ -403,7 +408,7 @@ static void signal_handler(int sn, siginfo_t * si, void *segfault_ctx)
+ #ifdef HAVE_LIBNX
+     MemoryInfo meminfo;
+     u32 pageinfo;
+-    svcQueryMemory(&meminfo, &pageinfo, (u64)&__start__);
++    svcQueryMemory(&meminfo, &pageinfo, (u64)&nx_module_anchor);
+    	ERROR_LOG(COMMON, ".text base: %p", meminfo.addr);
+ #endif // HAVE_LIBNX
+    	die("segfault");
+diff --git a/core/libretro/vmem_utils.cpp b/core/libretro/vmem_utils.cpp
+index f1d6fa0..cb6ca2a 100644
+--- a/core/libretro/vmem_utils.cpp
++++ b/core/libretro/vmem_utils.cpp
+@@ -139,10 +139,41 @@ bool mem_region_set_exec(void *start, size_t len)
+ 	return true;
+ }
+ 
++#ifdef HAVE_LIBNX
++// baske: virtmemReserve() was REMOVED from libnx; Flycast still uses it. The equivalent
++// with today's API (virtmemLock + virtmemFindAslr + virtmemAddReservation), the same
++// fix already made to mupen64plus-next in switch/mman.h.
++// We do not keep the VirtmemReservation*: there is no virtmemFree anywhere in this
++// tree, so Flycast never frees these reservations and they last as long as the process.
++// baske: for svcMapProcessCodeMemory libnx wants an address from the CODE MEMORY
++// region, which is NOT the ASLR region. Using virtmemFindAslr here makes the JIT's
++// mapping land on top of the heap and overwrite memory already reserved (the symptom:
++// the SH4 writes to a valid address in mem_b and gets a Data Abort, the page is gone).
++static inline void *nx_virtmem_reserve_code(size_t size)
++{
++	virtmemLock();
++	void *p = virtmemFindCodeMemory(size, 0);
++	if (p != NULL)
++		virtmemAddReservation(p, size);
++	virtmemUnlock();
++	return p;
++}
++
++static inline void *nx_virtmem_reserve(size_t size)
++{
++	virtmemLock();
++	void *p = virtmemFindAslr(size, 0);
++	if (p != NULL)
++		virtmemAddReservation(p, size);
++	virtmemUnlock();
++	return p;
++}
++#endif
++
+ void *mem_region_reserve(void *start, size_t len)
+ {
+ #ifdef HAVE_LIBNX
+-	return virtmemReserve(len);
++	return nx_virtmem_reserve(len);
+ #else
+ 	void *p = mmap(start, len, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+ 	if (p == MAP_FAILED)
+@@ -243,7 +274,7 @@ VMemType vmem_platform_init(void **vmem_base_addr, void **sh4rcb_addr) {
+ 	if (vmem_fd_page < 0)
+ 		return MemTypeError;
+ 
+-	vmem_fd_codememory = (uintptr_t)virtmemReserve(size_aligned);
++	vmem_fd_codememory = (uintptr_t)nx_virtmem_reserve_code(size_aligned);
+ 	
+ 	if(R_FAILED(svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64) vmem_fd_codememory, (u64) vmem_fd_page, size_aligned)))
+ 		printf("Failed to Map memory (platform_int)...\n");
+@@ -388,7 +419,7 @@ bool vmem_platform_prepare_jit_block(void *code_area, unsigned size, void **code
+ 	void *ptr_rw = mmap(NULL, size, PROT_READ | PROT_WRITE,
+ 	                    MAP_SHARED | MAP_NOSYNC, shmem_fd2, 0);
+ #else
+-	void* ptr_rw = virtmemReserve(size_aligned);
++	void* ptr_rw = nx_virtmem_reserve(size_aligned);
+ 	if(R_FAILED(svcMapProcessMemory(ptr_rw, envGetOwnProcessHandle(), (u64)code_area, size_aligned)))
+ 		printf("Failed to map jit rw block...\n");
+ #endif // HAVE_LIBNX
+diff --git a/link.T b/link.T
+index 9e82b5d..9491d04 100644
+--- a/link.T
++++ b/link.T
+@@ -1,4 +1,9 @@
+ {
+-   global: retro_*;
++   /* baske: __libnx_exception_handler has to stay VISIBLE. libnx declares it weak and
++      gives up on exception handling if it is not defined; the APPLICATION provides it,
++      not a library. Our core is loaded as a .so after libnx's crt0 has already been
++      linked, so the host looks for it here and forwards it. Without this, every page
++      fault Flycast expects to catch (that is how it emulates memory) is a hard crash. */
++   global: retro_*; __libnx_exception_handler;
+    local: *;
+ };

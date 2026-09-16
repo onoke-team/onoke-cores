@@ -1,0 +1,175 @@
+diff --git a/Makefile b/Makefile
+index 1e7c7cf..fec418b 100644
+--- a/Makefile
++++ b/Makefile
+@@ -224,13 +224,31 @@ else ifeq ($(platform), libnx)
+    DEFINES := -DSWITCH=1 -D__SWITCH__=1 -DHAVE_LIBNX=1
+    CFLAGS := -I$(LIBNX)/include/ -I$(PORTLIBS)/include/ -ffunction-sections -fdata-sections -ftls-model=local-exec -specs=$(LIBNX)/switch.specs
+    CFLAGS += -march=armv8-a -mtune=cortex-a57 -mtp=soft -mcpu=cortex-a57+crc+fp+simd
+-   fpic := -fPIE -pie
++   # baske: glsym/switch/nx_glsym.h declares its GL pointers WITHOUT extern (tentative
++   # definitions). GCC <10 merged them through the default -fcommon; devkitA64 is on GCC 15
++   # (-fno-common) and glsm.c and glsym_gl.c, which both include it, each bring their own
++   # copy -> "multiple definition of glBindTexture" at link time. mupen64plus-next carries
++   # this very line in its Makefile ("# Use -fcommon", CPUOPTS += -fcommon) for the same reason.
++   CFLAGS += -fcommon
++   # baske: it was "-fPIE -pie", and it is the ONLY one of the Makefile's eleven targets
++   # using PIE (the other ten use -fPIC). That suits RetroArch's .nro, but we relink the
++   # .a as a .so, and PIE code emits relocations a shared object does not accept:
++   # "dangerous relocation: unsupported relocation" on retro_init.
++   fpic := -fPIC
+    CXXFLAGS := $(ASFLAGS) $(CFLAGS)
+    STATIC_LINKING = 1
+    HAVE_OPENGL = 1
+    HAVE_THREADS = 1
+    HAVE_NEON = 1
+-   #JIT_ARCH = aarch64 # TODO: Re-add when armjit memory problems are fixed upstream
++   # baske: it was commented out with "TODO: Re-add when armjit memory problems are fixed
++   # upstream". That TODO looks OLD: src/ARMJIT_Memory.cpp already uses libnx's modern
++   # API (virtmemFindCodeMemory + virtmemFindAslr + virtmemAddReservation, with its
++   # matching virtmemRemoveReservation), NOT the virtmemReserve() that was removed and
++   # that we did have to patch in Flycast and PPSSPP. The real risk left is that Init()
++   # reserves TWO 4 GB regions of virtual space for fastmem, with asserts and no plan B;
++   # we put diagnostics there so that a failure can be read in the log.
++   # Without this the core runs on the pure INTERPRETER, and it is slow.
++   JIT_ARCH = aarch64
+ #######################################
+ 
+ # RPi4
+diff --git a/Makefile.common b/Makefile.common
+index fb49ba8..e5c7ce8 100644
+--- a/Makefile.common
++++ b/Makefile.common
+@@ -21,7 +21,14 @@ SOURCES_S   :=
+ # libretro-common symbols.
+ SOURCES_C  += $(CORE_DIR)/libretro-common/streams/memory_stream.c
+ 
+-ifneq ($(STATIC_LINKING), 1)
++# baske: with STATIC_LINKING=1 (the libnx case) this is left out on purpose, because the
++# core is taken to be linked INSIDE RetroArch, which already brings libretro-common. Our
++# frontend is not RetroArch: we relink the .a as a standalone .so and nobody brings them,
++# so the .so was left with 14 unresolved strong symbols (filestream_*, path_basename,
++# path_remove_extension, the rf* ones from file_stream_transforms and strlcpy_retro__).
++# BASKE_LIBRETRO_COMMON=1 forces them in without touching the original case; switch-so.mk
++# passes it. It is the same patch Flycast needed (see patches/README.md).
++ifneq ($(and $(filter 1,$(STATIC_LINKING)),$(if $(BASKE_LIBRETRO_COMMON),,1)), 1)
+ SOURCES_C  += $(CORE_DIR)/libretro-common/compat/compat_strl.c \
+               $(CORE_DIR)/libretro-common/compat/fopen_utf8.c \
+               $(CORE_DIR)/libretro-common/compat/compat_posix_string.c \
+diff --git a/src/ARMJIT_A64/ARMJIT_Compiler.cpp b/src/ARMJIT_A64/ARMJIT_Compiler.cpp
+index 5941656..425e5d3 100644
+--- a/src/ARMJIT_A64/ARMJIT_Compiler.cpp
++++ b/src/ARMJIT_A64/ARMJIT_Compiler.cpp
+@@ -25,7 +25,22 @@
+ #ifdef __SWITCH__
+ #include <switch.h>
+ 
+-extern char __start__;
++// baske: __start__ is defined by libnx's linker script when it builds a .nro, and it is
++// the module's base. Our core is loaded as a dynamic .so, so that symbol does not exist
++// and the link failed with "undefined reference to __start__". Here ANY address will not
++// do (unlike Flycast, where it was only used for logging): the value decides where the
++// JIT's executable memory goes, and that has to stay within reach of an AArch64 direct
++// branch (+-128 MB) of the core's code. So we ask for the module's REAL base with
++// svcQueryMemory over a function of our own.
++static void nx_module_anchor(void) { }
++
++static u8* nx_module_base()
++{
++    MemoryInfo info = {0};
++    u32 pageInfo = 0;
++    svcQueryMemory(&info, &pageInfo, (u64)&nx_module_anchor);
++    return (u8*)info.addr;
++}
+ #else
+ #include <sys/mman.h>
+ #include <unistd.h>
+@@ -223,7 +238,7 @@ Compiler::Compiler()
+ #ifdef __SWITCH__
+     JitRWBase = aligned_alloc(0x1000, JitMemSize);
+ 
+-    JitRXStart = (u8*)&__start__ - JitMemSize - 0x1000;
++    JitRXStart = nx_module_base() - JitMemSize - 0x1000;
+     virtmemLock();
+     JitRWStart = virtmemFindAslr(JitMemSize, 0x1000);
+     MemoryInfo info = {0};
+diff --git a/src/ARMJIT_Memory.cpp b/src/ARMJIT_Memory.cpp
+index 6d2e50a..870b3b4 100644
+--- a/src/ARMJIT_Memory.cpp
++++ b/src/ARMJIT_Memory.cpp
+@@ -709,11 +709,23 @@ void Init()
+         MemoryTotalSize, Perm_Rw));
+     assert(succeded);
+ 
++    // baske: diagnostics. This is what the Makefile called "armjit memory problems": TWO
++    // 4 GB regions of virtual space are reserved (fastmem: mapping the DS's 32-bit space
++    // 1:1 so no access has to be bounds-checked). If they do not fit, the bare assert gave
++    // a silent svcBreak; this way it is at least said in the log.
++    printf("[baske] JIT: mapeo de codigo %s (%u bytes)\n",
++           MemoryBaseCodeMem ? "OK" : "FALLO", (unsigned)MemoryTotalSize);
++
+     // 8 GB of address space, just don't ask...
+     FastMem9Start = virtmemFindAslr(AddrSpaceSize, 0x1000);
++    if (!FastMem9Start)
++        printf("[baske] JIT: virtmemFindAslr(4GB) para ARM9 FALLO -- sin espacio virtual\n");
+     assert(FastMem9Start);
+     FastMem7Start = virtmemFindAslr(AddrSpaceSize, 0x1000);
++    if (!FastMem7Start)
++        printf("[baske] JIT: virtmemFindAslr(4GB) para ARM7 FALLO -- sin espacio virtual\n");
+     assert(FastMem7Start);
++    printf("[baske] JIT: fastmem reservado, ARM9=%p ARM7=%p\n", FastMem9Start, FastMem7Start);
+ 
+     FastMem9Reservation = virtmemAddReservation(FastMem9Start, AddrSpaceSize);
+     FastMem7Reservation = virtmemAddReservation(FastMem7Start, AddrSpaceSize);
+diff --git a/src/dolphin/CommonFuncs.cpp b/src/dolphin/CommonFuncs.cpp
+index f85051d..e4c08f2 100644
+--- a/src/dolphin/CommonFuncs.cpp
++++ b/src/dolphin/CommonFuncs.cpp
+@@ -2,6 +2,14 @@
+ // Licensed under GPLv2+
+ // Refer to the license_dolphin.txt file included.
+ 
++// baske: newlib declares strerror_r only under __GNU_VISIBLE (the GNU flavour) or
++// __POSIX_VISIBLE >= 200112 (the XSI one), and the Switch build has neither, so it is
++// never declared. It has to go BEFORE any header. The code below already tells the two
++// flavours apart by the return type, so the GNU one suits it.
++#ifdef __SWITCH__
++#define _GNU_SOURCE
++#endif
++
+ #include <cstddef>
+ #include <cstring>
+ #include <errno.h>
+@@ -29,7 +37,15 @@ std::string LastStrerrorString()
+   // We check defines in order to figure out variant is in use, and we store the returned value
+   // to a variable so that we'll get a compile-time check that our assumption was correct.
+ 
+-#if defined(__GLIBC__) && (_GNU_SOURCE || (_POSIX_C_SOURCE < 200112L && _XOPEN_SOURCE < 600))
++// baske: newlib with _GNU_SOURCE gives the GNU flavour, which returns char*. The test
++// below asks for __GLIBC__, which does not exist in newlib, so it fell into the XSI
++// branch (int) and failed with "invalid conversion from char* to int". That test also
++// uses _GNU_SOURCE as a VALUE, and defined empty it reads "( || ...)" -> "operator '||'
++// has no left operand". With this branch first, the #elif below is never evaluated.
++#if defined(__SWITCH__)
++  const char* str = strerror_r(errno, error_message, BUFFER_SIZE);
++  return std::string(str);
++#elif defined(__GLIBC__) && (_GNU_SOURCE || (_POSIX_C_SOURCE < 200112L && _XOPEN_SOURCE < 600))
+   const char* str = strerror_r(errno, error_message, BUFFER_SIZE);
+   return std::string(str);
+ #else
+diff --git a/src/libretro/link.T b/src/libretro/link.T
+index 9e82b5d..2288bbc 100644
+--- a/src/libretro/link.T
++++ b/src/libretro/link.T
+@@ -1,4 +1,10 @@
+ {
+-   global: retro_*;
++   /* baske: __libnx_exception_handler has to stay VISIBLE. With JIT_ARCH=aarch64,
++      src/ARMJIT_Memory.cpp is built and it defines it: the JIT emulates virtual memory by
++      catching page faults. libnx declares it weak and the APPLICATION provides it, not a
++      library; our core is loaded as a .so after libnx's crt0 has already been linked, so
++      the host looks for it here and forwards it. Without this, every page fault the JIT
++      expects to catch is a hard crash. Same case as Flycast. */
++   global: retro_*; __libnx_exception_handler;
+    local: *;
+ };

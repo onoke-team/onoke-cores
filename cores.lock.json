@@ -1,0 +1,500 @@
+{
+  "version": 1,
+  "_readme": "What gets built, from which commit, with which recipe. See docs/DISTRIBUTION.md and tools/cores.py. Do not hand-edit a commit field without having built from it. `output` is the built file, and it may carry the path inside the core's tree (build-win/bin/Release/x.dll) when the build leaves it in a folder of its own: only its name is published. `dir` stays the source tree -- git, the patches and the pinned commit are read from there.",
+  "cores": [
+    {
+      "id": "vba_next",
+      "name": "VBA Next",
+      "systems": [
+        "Game Boy Advance"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/vba-next.git",
+        "commit": "2b96fd3a77025f3083daf61126b1852d5e0eace7",
+        "date": "2026-07-21",
+        "dir": "extern/vba-next",
+        "patches": [],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "vba_next_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/vba-next.git",
+        "commit": "2b96fd3a77025f3083daf61126b1852d5e0eace7",
+        "date": "2026-07-21",
+        "dir": "extern/win/vba-next",
+        "patches": [],
+        "recipe": "make -f Makefile.libretro platform=win -j8",
+        "output": "vba_next_libretro.dll"
+      }
+    },
+    {
+      "id": "mupen64plus_next",
+      "name": "Mupen64Plus-Next",
+      "systems": [
+        "Nintendo 64"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/mupen64plus-libretro-nx.git",
+        "commit": "f275caf4b2bfa1e6d1c51636746ea793f3d80320",
+        "date": "2026-08-06",
+        "dir": "extern/mupen64plus-libretro-nx",
+        "patches": [
+          "patches/mupen64plus-next/local-changes.patch"
+        ],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "mupen64plus_next_libretro.so",
+        "note": "The patch also carries two fixes that only matter to a PC build (-D_CRT_RAND_S, and -DNO_ASM when there is no dynarec). They are harmless here and are kept so the same checkout compiles on both."
+      },
+      "windows": {
+        "origin": "source",
+        "note": "Two things: the same response file as flycast, and -D_CRT_RAND_S -- rand_s() is MSVC’s and mingw only declares it when that is defined before <stdlib.h>.",
+        "repo": "https://github.com/libretro/mupen64plus-libretro-nx.git",
+        "commit": "f275caf4b2bfa1e6d1c51636746ea793f3d80320",
+        "date": "2026-08-06",
+        "dir": "extern/win/mupen64plus-libretro-nx",
+        "patches": [
+          "patches/mupen64plus-next/windows.patch"
+        ],
+        "recipe": "make platform=win -j8",
+        "output": "mupen64plus_next_libretro.dll"
+      }
+    },
+    {
+      "id": "pcsx_rearmed",
+      "name": "PCSX ReARMed",
+      "systems": [
+        "PlayStation"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/pcsx_rearmed.git",
+        "commit": "ba61a4fdee1f789e8012f205f1b63826667644fa",
+        "date": "2026-08-27",
+        "dir": "extern/pcsx_rearmed",
+        "patches": [],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "pcsx_rearmed_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/pcsx_rearmed.git",
+        "commit": "ba61a4fdee1f789e8012f205f1b63826667644fa",
+        "date": "2026-08-27",
+        "dir": "extern/win/pcsx_rearmed",
+        "patches": [],
+        "recipe": "make -f Makefile.libretro platform=win -j8",
+        "output": "pcsx_rearmed_libretro.dll"
+      }
+    },
+    {
+      "id": "melonds",
+      "name": "melonDS",
+      "systems": [
+        "Nintendo DS"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/melonDS.git",
+        "commit": "66b5d2634cd0a79030562811e6e05f5532f800ba",
+        "date": "2026-07-19",
+        "dir": "extern/melonds",
+        "patches": [
+          "patches/melonds/local-changes.patch"
+        ],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "melonds_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/melonDS.git",
+        "commit": "66b5d2634cd0a79030562811e6e05f5532f800ba",
+        "date": "2026-07-19",
+        "dir": "extern/win/melonds",
+        "patches": [],
+        "recipe": "make platform=win -j8",
+        "output": "melonds_libretro.dll"
+      }
+    },
+    {
+      "id": "flycast",
+      "name": "Flycast",
+      "systems": [
+        "Dreamcast",
+        "Naomi",
+        "Atomiswave"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/flycast",
+        "commit": "45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d",
+        "date": "2026-07-06",
+        "dir": "extern/flycast",
+        "patches": [
+          "patches/flycast/local-changes.patch"
+        ],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "flycast_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "note": "The link hands ld 240-odd objects and cmd.exe cuts the command line at 8191 characters, so it reports a truncated path as a missing file. The patch has make write a response file instead.",
+        "repo": "https://github.com/libretro/flycast",
+        "commit": "45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d",
+        "date": "2026-07-06",
+        "dir": "extern/win/flycast",
+        "patches": [
+          "patches/flycast/windows-link.patch"
+        ],
+        "recipe": "make platform=win -j8",
+        "output": "flycast_libretro.dll"
+      }
+    },
+    {
+      "id": "ppsspp",
+      "name": "PPSSPP",
+      "systems": [
+        "PlayStation Portable"
+      ],
+      "switch": {
+        "origin": "source",
+        "status": "untested",
+        "note": "Never run on the console: it builds and links, and nothing says PSP performs on this hardware. Not published until someone has actually played on it. The only one that does not build with `make platform=libnx`: upstream has no such target. Goes through CMake instead, see build-psp.sh.",
+        "repo": "https://github.com/hrydgard/ppsspp",
+        "commit": "2820fa946755f9d429dd4902aa806a2539b00fa2",
+        "date": "2026-09-02",
+        "dir": "extern/ppsspp",
+        "patches": [
+          "patches/ppsspp/local-changes.patch"
+        ],
+        "submodules": [
+          {
+            "dir": "libretro/libretro-common",
+            "commit": "76a3d54feb0ee0ce9d59b90aa24694f3782063d3",
+            "patch": "patches/ppsspp/libretro-common.patch"
+          },
+          {
+            "dir": "ext/lua",
+            "commit": "7648485f14e8e5ee45e8e39b1eb4d3206dbd405a",
+            "patch": "patches/ppsspp/lua.patch"
+          },
+          {
+            "dir": "ext/glslang",
+            "commit": "50e0708ec3a5c16020c4f845c654b80b8edb80bd",
+            "patch": "patches/ppsspp/glslang.patch"
+          },
+          {
+            "dir": "ext/aemu_postoffice",
+            "commit": "9e533637b9a13bb0194c75cf43b0bf6d25d8101a",
+            "patch": "patches/ppsspp/aemu_postoffice.patch"
+          },
+          {
+            "dir": "ext/armips/ext/filesystem",
+            "commit": "3f1c185ab414e764c694b8171d1c4d8c5c437517",
+            "patch": "patches/ppsspp/armips.patch"
+          }
+        ],
+        "recipe": "./build-psp.sh   # from the onoke root",
+        "output": "ppsspp_libretro.so"
+      },
+      "windows": {
+        "origin": "buildbot",
+        "output": "ppsspp_libretro.dll"
+      }
+    },
+    {
+      "id": "citra",
+      "name": "Citra",
+      "systems": [
+        "Nintendo 3DS"
+      ],
+      "switch": {
+        "origin": "source",
+        "status": "untested",
+        "note": "Compiles and links but has NEVER run on the console, and there are solid reasons to expect the 3DS not to perform on this hardware. See patches/README.md, section \"Performance expectation\". Do not publish it without testing it.",
+        "repo": "https://github.com/libretro/citra.git",
+        "commit": "4268124a74b55ddba69f29dc9858f222c4bd006d",
+        "date": "2026-08-04",
+        "dir": "extern/citra",
+        "patches": [
+          "patches/citra/local-changes.patch"
+        ],
+        "submodules": [
+          {
+            "dir": "externals/dynarmic",
+            "commit": "d333a09b3b9152af3cb442902ae8ea18d8416470",
+            "patch": "patches/citra/dynarmic.patch",
+            "note": "The patch includes oaknut, which lives inside the dynarmic tree and is not a separate repo."
+          },
+          {
+            "dir": "externals/libressl",
+            "commit": "d4fc7348a3fbe9c659a373e28a3b50f052f7c50a",
+            "patch": "patches/citra/libressl.patch"
+          }
+        ],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "citra_libretro.so"
+      }
+    },
+    {
+      "id": "swanstation",
+      "name": "SwanStation",
+      "systems": [
+        "PlayStation"
+      ],
+      "note": "Cloned in extern/ but never built for Switch. On PC the buildbot binary is used.",
+      "windows": {
+        "origin": "buildbot",
+        "output": "swanstation_libretro.dll"
+      }
+    },
+    {
+      "id": "mgba",
+      "name": "mGBA",
+      "systems": [
+        "Game Boy Advance",
+        "Game Boy",
+        "Game Boy Color"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/mgba.git",
+        "commit": "e31759b24e7a4e3899285ff720d7b573ac328ae7",
+        "date": "2026-08-05",
+        "dir": "extern/mgba",
+        "patches": [],
+        "recipe": "./build-gba.sh   # from the onoke root",
+        "output": "mgba_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/mgba.git",
+        "commit": "e31759b24e7a4e3899285ff720d7b573ac328ae7",
+        "date": "2026-08-05",
+        "dir": "extern/mgba",
+        "patches": [],
+        "recipe": "cmake -B build-win -G \"Unix Makefiles\" -DBUILD_LIBRETRO=ON -DSKIP_LIBRARY=ON -DBUILD_QT=OFF -DBUILD_SDL=OFF -DUSE_MINIZIP=ON -DUSE_PNG=OFF -DUSE_LIBZIP=OFF -DUSE_FFMPEG=OFF -DUSE_DISCORD_RPC=OFF -DUSE_SQLITE3=OFF -DUSE_ELF=OFF -DUSE_EPOXY=OFF && make -C build-win -j8 mgba_libretro   # deja el .dll en build-win/",
+        "output": "build-win/mgba_libretro.dll"
+      }
+    },
+    {
+      "id": "desmume",
+      "name": "DeSmuME",
+      "systems": [
+        "Nintendo DS"
+      ],
+      "windows": {
+        "origin": "buildbot",
+        "output": "desmume_libretro.dll"
+      }
+    },
+    {
+      "id": "mednafen_psx_hw",
+      "name": "Beetle PSX HW",
+      "systems": [
+        "PlayStation"
+      ],
+      "windows": {
+        "origin": "buildbot",
+        "output": "mednafen_psx_hw_libretro.dll"
+      }
+    },
+    {
+      "id": "mednafen_psx",
+      "name": "Beetle PSX",
+      "systems": [
+        "PlayStation"
+      ],
+      "windows": {
+        "origin": "buildbot",
+        "output": "mednafen_psx_libretro.dll"
+      }
+    },
+    {
+      "id": "azahar",
+      "name": "Azahar",
+      "systems": [
+        "Nintendo 3DS"
+      ],
+      "note": "The active successor to Citra, which was discontinued in March 2024. Upstream has no Switch target at all, which is why the console gets Citra instead.",
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/azahar-emu/azahar.git",
+        "commit": "26e608f6fa292b27cda0ae8c84e148d17600a5e6",
+        "date": "2026-09-09",
+        "dir": "extern/win/azahar",
+        "patches": [
+          "patches/azahar/windows-mingw.patch"
+        ],
+        "submodules_note": "git submodule update --init --recursive --depth 1 (dynarmic, sirit, libressl y el resto)",
+        "recipe": "cmake -B build-win -G \"Unix Makefiles\" -DCMAKE_BUILD_TYPE=Release -DENABLE_LIBRETRO=ON -DENABLE_QT=OFF -DENABLE_SDL2=OFF -DENABLE_WEB_SERVICE=OFF -DENABLE_TESTS=OFF -DENABLE_CUBEB=OFF && make -C build-win -j8 citra_libretro   # deja el .dll en build-win/bin/Release/",
+        "output": "build-win/bin/Release/azahar_libretro.dll"
+      }
+    },
+    {
+      "id": "genesis_plus_gx",
+      "name": "Genesis Plus GX",
+      "systems": [
+        "Mega Drive",
+        "Sega CD",
+        "Master System",
+        "Game Gear",
+        "SG-1000"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/genesis-plus-gx.git",
+        "commit": "a7985a9c4278ac352f8ca7bb4d3cc6b36e9e3e7d",
+        "date": "2026-08-28",
+        "dir": "extern/genesis-plus-gx",
+        "patches": [],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "genesis_plus_gx_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/genesis-plus-gx.git",
+        "commit": "a7985a9c4278ac352f8ca7bb4d3cc6b36e9e3e7d",
+        "date": "2026-08-28",
+        "dir": "extern/win/genesis-plus-gx",
+        "patches": [],
+        "recipe": "make -f Makefile.libretro platform=win -j8",
+        "output": "genesis_plus_gx_libretro.dll"
+      }
+    },
+    {
+      "id": "snes9x",
+      "name": "Snes9x",
+      "systems": [
+        "Super Nintendo"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/snes9x.git",
+        "commit": "890b5d445538fe790aa3add3d5702c80f551e0ae",
+        "date": "2026-08-16",
+        "dir": "extern/snes9x",
+        "patches": [
+          "patches/snes9x/local-changes.patch"
+        ],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "snes9x_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/snes9x.git",
+        "commit": "890b5d445538fe790aa3add3d5702c80f551e0ae",
+        "date": "2026-08-16",
+        "dir": "extern/win/snes9x",
+        "patches": [
+          "patches/snes9x/local-changes.patch",
+          "patches/snes9x/windows-link.patch"
+        ],
+        "recipe": "make -C libretro platform=win LTO= -j8",
+        "output": "libretro/snes9x_libretro.dll"
+      }
+    },
+    {
+      "id": "fceumm",
+      "name": "FCEUmm",
+      "systems": [
+        "Nintendo Entertainment System",
+        "Famicom"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/libretro-fceumm.git",
+        "commit": "236ccdfc911e84c60fea6b9d0699c2d440a8de14",
+        "date": "2026-08-22",
+        "dir": "extern/libretro-fceumm",
+        "patches": [
+          "patches/libretro-fceumm/local-changes.patch"
+        ],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "fceumm_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/libretro-fceumm.git",
+        "commit": "236ccdfc911e84c60fea6b9d0699c2d440a8de14",
+        "date": "2026-08-22",
+        "dir": "extern/win/libretro-fceumm",
+        "patches": [
+          "patches/libretro-fceumm/local-changes.patch",
+          "patches/libretro-fceumm/windows-link.patch"
+        ],
+        "recipe": "make -f Makefile.libretro platform=win -j8",
+        "output": "fceumm_libretro.dll"
+      }
+    },
+    {
+      "id": "gambatte",
+      "name": "Gambatte",
+      "systems": [
+        "Game Boy",
+        "Game Boy Color"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/gambatte-libretro.git",
+        "commit": "d9d6cd06382d1ced30de34d56d3609452323dab1",
+        "date": "2026-08-21",
+        "dir": "extern/gambatte-libretro",
+        "patches": [
+          "patches/gambatte-libretro/local-changes.patch"
+        ],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "gambatte_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/gambatte-libretro.git",
+        "commit": "d9d6cd06382d1ced30de34d56d3609452323dab1",
+        "date": "2026-08-21",
+        "dir": "extern/win/gambatte-libretro",
+        "patches": [
+          "patches/gambatte-libretro/local-changes.patch"
+        ],
+        "recipe": "make -f Makefile.libretro platform=win -j8",
+        "output": "gambatte_libretro.dll"
+      }
+    },
+    {
+      "id": "fbneo",
+      "name": "FinalBurn Neo",
+      "systems": [
+        "Arcade",
+        "Neo Geo",
+        "CPS1",
+        "CPS2",
+        "CPS3"
+      ],
+      "switch": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/FBNeo.git",
+        "commit": "a251c76229f1637e433b93e29845039752771b6d",
+        "date": "2026-09-04",
+        "dir": "extern/FBNeo",
+        "patches": [
+          "patches/FBNeo/local-changes.patch"
+        ],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "fbneo_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/libretro/FBNeo.git",
+        "commit": "a251c76229f1637e433b93e29845039752771b6d",
+        "date": "2026-09-04",
+        "dir": "extern/win/FBNeo",
+        "patches": [
+          "patches/FBNeo/local-changes.patch"
+        ],
+        "recipe": "make -C src/burner/libretro platform=win -j8",
+        "output": "src/burner/libretro/fbneo_libretro.dll"
+      }
+    }
+  ]
+}

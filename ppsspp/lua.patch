@@ -1,0 +1,22 @@
+diff --git a/luaconf.h b/luaconf.h
+index 33bb580..a12bcea 100644
+--- a/luaconf.h
++++ b/luaconf.h
+@@ -11,6 +11,17 @@
+ #include <limits.h>
+ #include <stddef.h>
+ 
++/* baske: devkitA64/newlib defines LONG_LONG_MAX (the historical BSD spelling) but NOT
++ * LLONG_MAX (the C99 one). Lua uses "defined(LLONG_MAX)" below as a stand-in for "the
++ * compiler is C99", so it gets a false negative and gives up with
++ * "Compiler does not support long long" -- even though the type is perfectly there
++ * (__LONG_LONG_MAX__ is defined). We bridge the C99 spellings. */
++#if !defined(LLONG_MAX) && defined(LONG_LONG_MAX)
++#define LLONG_MAX	LONG_LONG_MAX
++#define LLONG_MIN	LONG_LONG_MIN
++#define ULLONG_MAX	ULONG_LONG_MAX
++#endif
++
+ 
+ /*
+ ** ===================================================================

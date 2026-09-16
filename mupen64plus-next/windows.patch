@@ -1,0 +1,142 @@
+diff --git a/Makefile b/Makefile
+index 2443f80..4a5a58f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -601,7 +601,17 @@ else
+    HAVE_PARALLEL_RDP = 1
+    HAVE_THR_AL = 1
+    LLE = 1
+-   COREFLAGS += -DOS_WINDOWS -DMINGW -DUNICODE
++   # rand_s() belongs to MSVC's CRT; mingw only declares it when _CRT_RAND_S is defined
++   # BEFORE <stdlib.h>. Without this libretro.c does not compile under mingw
++   # ("implicit declaration of function 'rand_s'").
++   COREFLAGS += -DOS_WINDOWS -DMINGW -DUNICODE -D_CRT_RAND_S
++   # With WITH_DYNAREC= (pure interpreter) NO_ASM has to be defined. Without
++   # NEW_DYNAREC, cp0.c / interrupt.c / r4300_core.c compile the OLD dynarec path and
++   # leave references to dyna_jump/dyna_stop/dynarec_jump_to that nobody defines -- it
++   # does not link. NO_ASM leaves that path out. Only when no dynarec was asked for.
++   ifeq ($(WITH_DYNAREC),)
++      COREFLAGS += -DNO_ASM
++   endif
+    CXXFLAGS += -fpermissive
+ endif
+ 
+@@ -699,7 +709,9 @@ $(TARGET): $(OBJECTS)
+ ifeq ($(STATIC_LINKING), 1)
+ 	$(AR) rcs $@ $(OBJECTS)
+ else
+-	$(CXX) -o $@ $(OBJECTS) $(LDFLAGS) $(GL_LIB)
++	$(file >$@.rsp,$(OBJECTS))
++	$(CXX) -o $@ @$@.rsp $(LDFLAGS) $(GL_LIB)
++	@rm -f $@.rsp
+ endif
+ 
+ # Script hackery fll or generating ASM include files for the new dynarec assembly code
+diff --git a/libretro-common/glsm/glsm.c b/libretro-common/glsm/glsm.c
+index b3e8c60..39da7f8 100644
+--- a/libretro-common/glsm/glsm.c
++++ b/libretro-common/glsm/glsm.c
+@@ -3097,6 +3097,18 @@ static void glsm_state_setup(void)
+ static void glsm_state_bind(void)
+ {
+    unsigned i;
++
++   /* baske: glsm assumes it OWNS the GL context (as it does in RetroArch) and elides
++    * redundant state: rglBindBuffer() skips the real glBindBuffer when its cache says
++    * that buffer is already bound. With the frontend sharing the context -- here
++    * nanovg/Borealis draws the UI between frames and binds ITS vertex buffer -- the
++    * cache is lying, and the core ends up reading vertices out of somebody else's
++    * buffer: missing or garbage geometry, and NO GL error at all.
++    * glsm_state_bind() restores the program, the viewport, textures and attribute
++    * pointers, but the buffer bindings were missing from that list. They go back from
++    * the cache, which is exactly what this function is for. */
++   glBindBuffer(GL_ARRAY_BUFFER, gl_state.array_buffer);
++
+ #ifndef HAVE_OPENGLES2
+    if (gl_state.bindvertex.array != 0) {
+       glBindVertexArray(gl_state.bindvertex.array);
+@@ -3104,6 +3116,10 @@ static void glsm_state_bind(void)
+    } else
+ #endif
+    {
++      /* The GL_ELEMENT_ARRAY_BUFFER binding is VAO state: it is only touched on the
++       * no-VAO path, so as not to corrupt the one the core has bound above. */
++      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_state.index_buffer);
++
+       for (i = 0; i < MAX_ATTRIB; i++)
+       {
+          if (gl_state.vertex_attrib_pointer.enabled[i])
+@@ -3133,10 +3149,26 @@ static void glsm_state_bind(void)
+       gl_state.framebuf[1].location = default_framebuffer;
+    }
+ 
++   /* baske: THIS WAS ASYMMETRIC, and it is what breaks rendering on a shared context.
++    * It only glEnable'd the capabilities the cache says are ON, without glDisable'ing
++    * the ones it says are OFF. Sharing the context with nanovg -- whose flush does
++    * glEnable(GL_CULL_FACE) + glCullFace(GL_BACK) + glFrontFace(CCW) -- left culling on
++    * for good:
++    *   1. GLideN64 turns culling off -> glsm notes cap_state=0 and disables it.
++    *   2. nanovg draws the UI and turns it back on, behind glsm's back.
++    *   3. glsm_state_bind() does not disable it, because its cache already says OFF.
++    *   4. GLideN64 asks for it off again, and rglDisable() skips the call on seeing
++    *      the cache already at 0.
++    * The result is that single-sided surfaces are thrown away by back-face culling
++    * (RenderDoc confirms it: "Backface culled" over the terrain's draws).
++    * The restore has to be symmetric: leave every capability EXACTLY as the cache says,
++    * not only switch things on. */
+    for(i = 0; i < SGL_CAP_MAX; i ++)
+    {
+       if (gl_state.cap_state[i])
+          glEnable(gl_state.cap_translate[i]);
++      else
++         glDisable(gl_state.cap_translate[i]);
+    }
+    
+    if (gl_state.blendfunc.used)
+@@ -3168,8 +3200,10 @@ static void glsm_state_bind(void)
+             gl_state.colormask.blue,
+             gl_state.colormask.alpha);
+ 
+-   if (gl_state.cullface.used)
+-      glCullFace(gl_state.cullface.mode);
++   /* baske: no "used" guard, same as above: if the core never touched them the cache
++    * holds the right default (GL_BACK / GL_CCW), and it still has to be imposed,
++    * because nanovg may have changed them behind glsm's back. */
++   glCullFace(gl_state.cullface.mode);
+ 
+    if (gl_state.depthmask.used)
+       glDepthMask(gl_state.depthmask.mask);
+@@ -3194,8 +3228,7 @@ static void glsm_state_bind(void)
+          gl_state.viewport.w,
+          gl_state.viewport.h);
+ 
+-   if (gl_state.frontface.used)
+-      glFrontFace(gl_state.frontface.mode);
++   glFrontFace(gl_state.frontface.mode);
+ 
+    if (gl_state.stencilmask.used)
+       glStencilMask(gl_state.stencilmask.mask);
+@@ -3211,6 +3244,23 @@ static void glsm_state_bind(void)
+             gl_state.stencilfunc.ref,
+             gl_state.stencilfunc.mask);
+ 
++   /* baske: the same problem as the buffers, but for TEXTURES. rglBindTexture() elides
++    * redundant state too: it skips the real glBindTexture when its cache says that
++    * texture is already on the active unit. With the frontend sharing the context --
++    * nanovg binds ITS textures between frames, behind glsm's back -- the cache lies and
++    * the core's textures are never bound: missing textures, and no GL error.
++    * On top of that this function restored ONE unit only, the active one, leaving the
++    * rest with whatever was there -- which is why the driver warns that unit 2 holds
++    * texture 0. Every unit goes back from the cache, and only then is the right one
++    * left active. */
++   {
++      unsigned u;
++      for (u = 0; u < (unsigned)glsm_max_textures; u++)
++      {
++         glActiveTexture(GL_TEXTURE0 + u);
++         glBindTexture(gl_state.bind_textures.target[u], gl_state.bind_textures.ids[u]);
++      }
++   }
+    glActiveTexture(GL_TEXTURE0 + active_texture);
+    glBindTexture(gl_state.bind_textures.target[active_texture], gl_state.bind_textures.ids[active_texture]);
+ }

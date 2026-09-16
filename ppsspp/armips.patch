@@ -1,0 +1,15 @@
+diff --git a/include/ghc/filesystem.hpp b/include/ghc/filesystem.hpp
+index 5cd76ae..4ee4767 100644
+--- a/include/ghc/filesystem.hpp
++++ b/include/ghc/filesystem.hpp
+@@ -54,6 +54,10 @@
+ #if defined(__ANDROID__)
+ #define GHC_OS_ANDROID
+ #endif
++#elif defined(__SWITCH__)
++/* baske: libnx (newlib) is POSIX-ish; ghc does not know it and gives up with
++ * "Operating system currently not supported". We treat it as Linux. */
++#define GHC_OS_LINUX
+ #elif defined(_WIN64)
+ #define GHC_OS_WINDOWS
+ #define GHC_OS_WIN64

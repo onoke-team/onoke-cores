@@ -1,0 +1,13 @@
+diff --git a/Makefile.libretro b/Makefile.libretro
+index 5b90d40..d7f92a9 100644
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -333,7 +333,7 @@ else ifeq ($(platform), libnx)
+     DEFINES := -DSWITCH=1 -U__linux__ -U__linux -DRARCH_INTERNAL
+     CFLAGS	:=	 $(DEFINES) -g \
+                 -O2 \
+-				-fPIE -I$(LIBNX)/include/ -ffunction-sections -fdata-sections -ftls-model=local-exec -Wl,--allow-multiple-definition -specs=$(LIBNX)/switch.specs
++				-fPIC -I$(LIBNX)/include/ -ffunction-sections -fdata-sections -ftls-model=local-exec -Wl,--allow-multiple-definition -specs=$(LIBNX)/switch.specs
+     CFLAGS += $(INCDIRS)
+     CFLAGS	+=	$(INCLUDE)  -D__SWITCH__ -DHAVE_LIBNX
+     CXXFLAGS := $(ASFLAGS) $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11

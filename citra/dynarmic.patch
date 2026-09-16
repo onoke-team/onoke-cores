@@ -1,0 +1,189 @@
+diff --git a/externals/oaknut/include/oaknut/code_block.hpp b/externals/oaknut/include/oaknut/code_block.hpp
+index 1c29ad0..0deeea6 100644
+--- a/externals/oaknut/include/oaknut/code_block.hpp
++++ b/externals/oaknut/include/oaknut/code_block.hpp
+@@ -17,6 +17,38 @@
+ #    include <pthread.h>
+ #    include <sys/mman.h>
+ #    include <unistd.h>
++#elif defined(__SWITCH__)
++// baske: the Switch has no sys/mman.h and its kernel enforces W^X: there is no memory
++// that is writable and executable at once. The way out is to map the buffer through ONE
++// alias with svcMapProcessCodeMemory and flip its permissions between Perm_Rw and
++// Perm_Rx. That fits oaknut's model -- a single address to emit and to execute -- because
++// dynarmic already calls unprotect() before emitting and protect() before executing (see
++// backend/arm64/address_space.cpp). It is the same mechanism melonDS uses.
++//
++// The libnx functions are declared BY HAND instead of including <switch.h>: half of Citra
++// pulls this header in, and switch.h contaminates it with its BIT(n) macro -- which treads
++// on oaknut's ARM64 BIT instruction -- and with its u128 typedef, which clashes with
++// Citra's. The signatures come from libnx/include/switch/{kernel/svc.h,virtmem.h,env.h}.
++#    include <cstddef>
++#    include <cstdlib>
++extern "C" {
++struct VirtmemReservation;
++unsigned int svcMapProcessCodeMemory(unsigned int proc, unsigned long dst, unsigned long src, unsigned long size);
++unsigned int svcUnmapProcessCodeMemory(unsigned int proc, unsigned long dst, unsigned long src, unsigned long size);
++unsigned int svcSetProcessMemoryPermission(unsigned int proc, unsigned long addr, unsigned long size, unsigned int perm);
++unsigned int envGetOwnProcessHandle(void);
++void virtmemLock(void);
++void virtmemUnlock(void);
++void* virtmemFindCodeMemory(std::size_t size, std::size_t guard_size);
++struct VirtmemReservation* virtmemAddReservation(void* mem, std::size_t size);
++void virtmemRemoveReservation(struct VirtmemReservation* rv);
++void armDCacheFlush(void* addr, std::size_t size);
++void armICacheInvalidate(void* addr, std::size_t size);
++}
++extern "C" int printf(const char*, ...);
++// Perm_R|Perm_W and Perm_R|Perm_X (svc.h): stable values of Horizon's ABI.
++#    define OAKNUT_NX_PERM_RW 3
++#    define OAKNUT_NX_PERM_RX 5
+ #else
+ #    include <sys/mman.h>
+ #endif
+@@ -36,6 +68,35 @@ public:
+ #    else
+         m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
+ #    endif
++#elif defined(__SWITCH__)
++        // A normal backing plus an executable alias onto the very same physical pages.
++        m_src = std::aligned_alloc(0x1000, (size + 0xFFF) & ~std::size_t{0xFFF});
++        if (m_src != nullptr) {
++            m_size = (size + 0xFFF) & ~std::size_t{0xFFF};
++            virtmemLock();
++            void* alias = virtmemFindCodeMemory(m_size, 0x1000);
++            if (alias != nullptr)
++                m_rv = virtmemAddReservation(alias, m_size);
++            virtmemUnlock();
++
++            if (alias != nullptr &&
++                svcMapProcessCodeMemory(envGetOwnProcessHandle(), (unsigned long)alias,
++                                        (unsigned long)m_src, m_size) == 0) {
++                m_memory = (std::uint32_t*)alias;
++                printf("[JIT] bloque de codigo mapeado en %p (%u bytes)\n",
++                       (void*)alias, (unsigned)m_size);
++                // baske: an EXPLICIT initial permission. Freshly mapped, the alias is
++                // neither writable nor executable, and although dynarmic calls unprotect()
++                // before emitting, leaving the initial state to chance invites an
++                // "Instruction Abort" that is hard to trace. melonDS does exactly this.
++                nx_set_perm(OAKNUT_NX_PERM_RW, "RW inicial");
++            } else {
++                printf("[JIT] FALLO al mapear memoria de codigo: alias=%p. Sin JIT no hay "
++                       "emulacion posible.\n", (void*)alias);
++                std::free(m_src);
++                m_src = nullptr;
++            }
++        }
+ #else
+         m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
+ #endif
+@@ -51,6 +112,14 @@ public:
+ 
+ #if defined(_WIN32)
+         VirtualFree((void*)m_memory, 0, MEM_RELEASE);
++#elif defined(__SWITCH__)
++        svcUnmapProcessCodeMemory(envGetOwnProcessHandle(), (unsigned long)m_memory,
++                                  (unsigned long)m_src, m_size);
++        virtmemLock();
++        if (m_rv != nullptr)
++            virtmemRemoveReservation(m_rv);
++        virtmemUnlock();
++        std::free(m_src);
+ #else
+         munmap(m_memory, m_size);
+ #endif
+@@ -66,9 +135,33 @@ public:
+         return m_memory;
+     }
+ 
++#if defined(__SWITCH__)
++    // baske: the result CANNOT be ignored. If the kernel refuses the permission change we
++    // carry on as if nothing happened and the JIT ends up EXECUTING memory with no execute
++    // permission (or WRITING over read-only memory): an abort fires, our handler turns it
++    // into a User Break, and the report points at ARM_Dynarmic::Run() with no hint of the
++    // real cause. It is said ONCE PER DIRECTION: with a single shared flag, a failure to
++    // go RW would hide whether going RX fails too, or the other way round.
++    void nx_set_perm(unsigned int perm, const char* que)
++    {
++        const unsigned int rc = svcSetProcessMemoryPermission(
++            envGetOwnProcessHandle(), (unsigned long)m_memory, m_size, perm);
++        if (rc == 0)
++            return;
++        static bool avisado_rw = false, avisado_rx = false;
++        bool& avisado = (perm == OAKNUT_NX_PERM_RW) ? avisado_rw : avisado_rx;
++        if (avisado)
++            return;
++        avisado = true;
++        printf("[JIT] svcSetProcessMemoryPermission(%s) FALLO rc=0x%x en %p (%u bytes). El JIT va a usar memoria sin el permiso que corresponde y va a crashear.\n", que, rc, (void*)m_memory, (unsigned)m_size);
++    }
++#endif
++
+     void protect()
+     {
+-#if defined(__APPLE__)
++#if defined(__SWITCH__)
++        nx_set_perm(OAKNUT_NX_PERM_RX, "RX");
++#elif defined(__APPLE__)
+ #    if TARGET_OS_IPHONE
+         mprotect(m_memory, m_size, PROT_READ | PROT_EXEC);
+ #    else
+@@ -79,7 +172,9 @@ public:
+ 
+     void unprotect()
+     {
+-#if defined(__APPLE__)
++#if defined(__SWITCH__)
++        nx_set_perm(OAKNUT_NX_PERM_RW, "RW");
++#elif defined(__APPLE__)
+ #    if TARGET_OS_IPHONE
+         mprotect(m_memory, m_size, PROT_READ | PROT_WRITE);
+ #    else
+@@ -94,6 +189,11 @@ public:
+         sys_icache_invalidate(mem, size);
+ #elif defined(_WIN32)
+         FlushInstructionCache(GetCurrentProcess(), mem, size);
++#elif defined(__SWITCH__)
++        // baske: libnx already brings the cache maintenance helpers; better than repeating
++        // the assembly below, which also reads ctr_el0 (not always readable in user mode).
++        armDCacheFlush(mem, size);
++        armICacheInvalidate(mem, size);
+ #else
+         static std::size_t icache_line_size = 0x10000, dcache_line_size = 0x10000;
+ 
+@@ -136,8 +236,12 @@ public:
+     }
+ 
+ protected:
+-    std::uint32_t* m_memory;
++    std::uint32_t* m_memory = nullptr;
+     std::size_t m_size = 0;
++#if defined(__SWITCH__)
++    void* m_src = nullptr;              // baske: RW backing that maps the executable alias
++    struct VirtmemReservation* m_rv = nullptr;
++#endif
+ };
+ 
+ }  // namespace oaknut
+diff --git a/externals/oaknut/include/oaknut/oaknut.hpp b/externals/oaknut/include/oaknut/oaknut.hpp
+index b67f7fd..860e649 100644
+--- a/externals/oaknut/include/oaknut/oaknut.hpp
++++ b/externals/oaknut/include/oaknut/oaknut.hpp
+@@ -53,6 +53,18 @@ struct Label {
+ public:
+     Label() = default;
+ 
++    // baske: Citra's ARM64 shader JIT (src/video_core/shader/shader_jit_a64_compiler) was
++    // written against a NEWER oaknut than the one dynarmic brings here, and it uses this
++    // accessor in two places to jump into code already emitted. The class keeps the
++    // address already; all that was missing was exposing it. The alternative was giving up
++    // the shader JIT and leaving them interpreted, which on a 3DS emulator is paid dearly.
++    // Only valid once the label has been resolved (l(label) already emitted).
++    template<typename T>
++    T ptr() const
++    {
++        return reinterpret_cast<T>(*m_addr);
++    }
++
+ private:
+     template<typename Policy>
+     friend class BasicCodeGenerator;

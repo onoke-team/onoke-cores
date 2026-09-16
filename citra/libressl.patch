@@ -1,0 +1,80 @@
+diff --git a/include/compat/endian.h b/include/compat/endian.h
+index d9f7eb2..1ab9eda 100644
+--- a/include/compat/endian.h
++++ b/include/compat/endian.h
+@@ -26,6 +26,11 @@
+ 
+ #elif defined(HAVE_MACHINE_ENDIAN_H)
+ #include_next <machine/endian.h>
++/* baske: in newlib <machine/endian.h> only brings BYTE_ORDER and company; the functions
++ * htobe32/htobe64/be32toh... live in <sys/endian.h>, which has to be included apart. */
++#ifdef __SWITCH__
++#include <sys/endian.h>
++#endif
+ 
+ #elif defined(__sun) || defined(_AIX) || defined(__hpux)
+ #include <sys/types.h>
+diff --git a/include/compat/limits.h b/include/compat/limits.h
+index 73cccfc..b44232e 100644
+--- a/include/compat/limits.h
++++ b/include/compat/limits.h
+@@ -23,3 +23,12 @@
+ #define PATH_MAX MAXPATHLEN
+ #endif
+ #endif
++
++/* baske: newlib does not define SSIZE_MAX (POSIX asks for it in <limits.h>, but there it
++ * sits behind feature macros the Switch build does not turn on). bss_bio.c uses it to cap
++ * read and write sizes. ssize_t is signed and as wide as size_t, so its maximum is
++ * SIZE_MAX/2. */
++#ifndef SSIZE_MAX
++#include <stdint.h>
++#define SSIZE_MAX ((ssize_t)(SIZE_MAX / 2))
++#endif
+diff --git a/include/compat/netinet/in.h b/include/compat/netinet/in.h
+index d1afb27..cfec159 100644
+--- a/include/compat/netinet/in.h
++++ b/include/compat/netinet/in.h
+@@ -5,6 +5,13 @@
+ 
+ #ifndef _WIN32
+ #include_next <netinet/in.h>
++/* baske: libnx's <netinet/in.h> USES ntohl() on its line 630 but does not declare it --
++ * in libnx that lives in <arpa/inet.h>. Any libressl .c that includes netinet/in.h
++ * (bss_dgram.c, bss_conn.c) fails with "implicit declaration of ntohl/htonl/htons", which
++ * GCC 14+ treats as an error. We include it here, the point they all go through. */
++#ifdef __SWITCH__
++#include <arpa/inet.h>
++#endif
+ #else
+ #include <win32netcompat.h>
+ #endif
+diff --git a/include/compat/syslog.h b/include/compat/syslog.h
+index f400ff6..aea7849 100644
+--- a/include/compat/syslog.h
++++ b/include/compat/syslog.h
+@@ -3,7 +3,13 @@
+  * syslog.h compatibility shim
+  */
+ 
+-#ifndef _WIN32
++/* baske: this shim assumes EVERY platform that is not Windows has a system <syslog.h> and
++ * only adds syslog_r on top of it. newlib/libnx does not have one, so the include_next
++ * failed with "syslog.h: No such file or directory". We treat the Switch like Windows: no
++ * include_next, and the LOG_* constants defined below. The implementation stays a no-op,
++ * which is the right answer -- vsyslog_r() only calls vsyslog() when HAVE_SYSLOG is
++ * defined, and on a console there is no syslog to write to. */
++#if !defined(_WIN32) && !defined(__SWITCH__)
+ #include_next <syslog.h>
+ #endif
+ 
+@@ -14,7 +20,8 @@
+ 
+ #include <stdarg.h>
+ 
+-#ifdef _WIN32
++/* baske: same as above -- on the Switch they do not come from the system either. */
++#if defined(_WIN32) || defined(__SWITCH__)
+ #define	LOG_INFO	6	/* informational */
+ #define LOG_USER    (1<<3)  /* random user-level messages */
+ #define	LOG_LOCAL2	(18<<3)	/* reserved for local use */

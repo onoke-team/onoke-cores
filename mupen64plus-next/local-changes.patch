@@ -1,0 +1,250 @@
+diff --git a/GLideN64/src/Graphics/OpenGLContext/opengl_GLInfo.cpp b/GLideN64/src/Graphics/OpenGLContext/opengl_GLInfo.cpp
+index c1e51b5..92ed574 100644
+--- a/GLideN64/src/Graphics/OpenGLContext/opengl_GLInfo.cpp
++++ b/GLideN64/src/Graphics/OpenGLContext/opengl_GLInfo.cpp
+@@ -1,3 +1,4 @@
++#include <cstdio>   /* baske: the printf for the shader cache */
+ #include <Log.h>
+ #include <Config.h>
+ #include "opengl_Utils.h"
+@@ -145,11 +146,20 @@ void GLInfo::init() {
+ 		const char * strGetProgramBinary = isGLESX
+ 			? "GL_OES_get_program_binary"
+ 			: "GL_ARB_get_program_binary";
++		GLint numBinaryFormats = 0;
+ 		if ((isGLESX && numericVersion >= 30) || (!isGLESX && numericVersion >= 41) || Utils::isExtensionSupported(*this, strGetProgramBinary)) {
+-			GLint numBinaryFormats = 0;
+ 			glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &numBinaryFormats);
+ 			shaderStorage = numBinaryFormats > 0;
+ 		}
++		/* baske: which of the two caches there is decides what to expect. With binary
++		 * formats the shader is stored already compiled and the second session starts
++		 * compiling nothing; without them only the KEYS are stored and it recompiles on
++		 * load -- which still helps, since it takes the stutter out of the middle of the
++		 * game, but it is paid on entry. A driver with no formats says so no other way. */
++		printf("[gliden64] cache de shaders: %s (formatos binarios=%d)\n",
++		       shaderStorage ? "binary" : "keys only", (int)numBinaryFormats);
++	} else {
++		printf("[gliden64] shader cache TURNED OFF by a core option\n");
+ 	}
+ 
+ 	bool ext_draw_buffers_indexed = isGLESX && (Utils::isExtensionSupported(*this, "GL_EXT_draw_buffers_indexed") || numericVersion >= 32);
+diff --git a/Makefile b/Makefile
+index 2443f80..f8adc05 100644
+--- a/Makefile
++++ b/Makefile
+@@ -601,7 +601,17 @@ else
+    HAVE_PARALLEL_RDP = 1
+    HAVE_THR_AL = 1
+    LLE = 1
+-   COREFLAGS += -DOS_WINDOWS -DMINGW -DUNICODE
++   # baske: rand_s() belongs to MSVC's CRT; mingw only declares it when _CRT_RAND_S is
++   # defined BEFORE <stdlib.h>. Without this, libretro.c does not compile under mingw
++   # ("implicit declaration of function 'rand_s'").
++   COREFLAGS += -DOS_WINDOWS -DMINGW -DUNICODE -D_CRT_RAND_S
++   # baske: with WITH_DYNAREC= (pure interpreter) NO_ASM has to be defined. Without
++   # NEW_DYNAREC, cp0.c / interrupt.c / r4300_core.c compile the OLD dynarec path and
++   # leave references to dyna_jump/dyna_stop/dynarec_jump_to that nobody defines -- it
++   # does not link. NO_ASM leaves that path out. Only when no dynarec was asked for.
++   ifeq ($(WITH_DYNAREC),)
++      COREFLAGS += -DNO_ASM
++   endif
+    CXXFLAGS += -fpermissive
+ endif
+ 
+@@ -697,7 +707,14 @@ all: $(TARGET)
+ $(TARGET): $(OBJECTS)
+ 
+ ifeq ($(STATIC_LINKING), 1)
+-	$(AR) rcs $@ $(OBJECTS)
++# baske: the object list runs past 300 and the command line goes over Windows' limit.
++# ar was getting it TRUNCATED and wrote an incomplete .a with unreadable members
++# ("file format not recognized"), without failing -- the error only turned up at link
++# time. A response file (@list) has no such limit.
++	@rm -f $@ $@.objs
++	@for o in $(OBJECTS); do echo $$o; done > $@.objs
++	$(AR) rcs $@ @$@.objs
++	@rm -f $@.objs
+ else
+ 	$(CXX) -o $@ $(OBJECTS) $(LDFLAGS) $(GL_LIB)
+ endif
+diff --git a/custom/mupen64plus-core/api/config.c b/custom/mupen64plus-core/api/config.c
+index 63a79c1..494f5ba 100644
+--- a/custom/mupen64plus-core/api/config.c
++++ b/custom/mupen64plus-core/api/config.c
+@@ -1309,7 +1309,16 @@ EXPORT const char * CALL ConfigGetUserDataPath(void)
+   return "";
+ }
+ 
++/* baske: GLideN64 uses this path for its cache of already compiled shaders
++ * (EnableShadersStorage, which comes on). Returning "" left the cache hanging off the
++ * root of the card ("/GLideN64ShaderCache/") -- outside the app's folder, with no
++ * guarantee it could even be created. When it cannot be written, the shaders are
++ * compiled again EVERY session, and that is the stutter on entering each new area.
++ * The frontend's system directory exists, is writable, and is where the rest of the
++ * core's things already live. */
++extern const char* retro_get_system_directory(void);
++
+ EXPORT const char * CALL ConfigGetUserCachePath(void)
+ {
+-  return "";
++  return retro_get_system_directory();
+ }
+diff --git a/libretro-common/glsm/glsm.c b/libretro-common/glsm/glsm.c
+index b3e8c60..ddc88db 100644
+--- a/libretro-common/glsm/glsm.c
++++ b/libretro-common/glsm/glsm.c
+@@ -3097,6 +3097,18 @@ static void glsm_state_setup(void)
+ static void glsm_state_bind(void)
+ {
+    unsigned i;
++
++   /* baske: glsm assumes it OWNS the GL context (as it does in RetroArch) and elides
++    * redundant state: rglBindBuffer() skips the real glBindBuffer when its cache says
++    * that buffer is already bound. With the frontend sharing the context -- here
++    * nanovg/Borealis draws the UI between frames and binds ITS vertex buffer -- the
++    * cache is lying, and the core ends up reading vertices out of somebody else's
++    * buffer: missing or garbage geometry, and NO GL error at all.
++    * glsm_state_bind() restores the program, the viewport, textures and attribute
++    * pointers, but the buffer bindings were missing from that list. They go back from
++    * the cache, which is exactly what this function is for. */
++   glBindBuffer(GL_ARRAY_BUFFER, gl_state.array_buffer);
++
+ #ifndef HAVE_OPENGLES2
+    if (gl_state.bindvertex.array != 0) {
+       glBindVertexArray(gl_state.bindvertex.array);
+@@ -3104,6 +3116,10 @@ static void glsm_state_bind(void)
+    } else
+ #endif
+    {
++      /* The GL_ELEMENT_ARRAY_BUFFER binding is VAO state: it is only touched on the
++       * no-VAO path, so as not to corrupt the one the core has bound above. */
++      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gl_state.index_buffer);
++
+       for (i = 0; i < MAX_ATTRIB; i++)
+       {
+          if (gl_state.vertex_attrib_pointer.enabled[i])
+@@ -3133,10 +3149,26 @@ static void glsm_state_bind(void)
+       gl_state.framebuf[1].location = default_framebuffer;
+    }
+ 
++   /* baske: THIS WAS ASYMMETRIC, and it is the cause of the render bug with a shared
++    * context. It only did glEnable on the capabilities the cache says are ON, without
++    * glDisable on the ones it says are OFF. Sharing the context with nanovg (whose
++    * flush does glEnable(GL_CULL_FACE) + glCullFace(GL_BACK) + glFrontFace(CCW)),
++    * culling was left on for ever:
++    *   1. GLideN64 turns culling off -> glsm notes cap_state=0 and disables it.
++    *   2. nanovg draws the UI and turns it back on, behind glsm's back.
++    *   3. glsm_state_bind() does not disable it, because its cache says OFF.
++    *   4. GLideN64 asks to disable it again, but rglDisable() skips the call on
++    *      seeing the cache already at 0.
++    * The result: single-sided surfaces are thrown away by back-face culling
++    * (confirmed with RenderDoc: "Backface culled" over the terrain draws).
++    * The restore has to be symmetric: leave every capability EXACTLY as the cache
++    * says, not only turn things on. */
+    for(i = 0; i < SGL_CAP_MAX; i ++)
+    {
+       if (gl_state.cap_state[i])
+          glEnable(gl_state.cap_translate[i]);
++      else
++         glDisable(gl_state.cap_translate[i]);
+    }
+    
+    if (gl_state.blendfunc.used)
+@@ -3168,8 +3200,10 @@ static void glsm_state_bind(void)
+             gl_state.colormask.blue,
+             gl_state.colormask.alpha);
+ 
+-   if (gl_state.cullface.used)
+-      glCullFace(gl_state.cullface.mode);
++   /* baske: no "used" guard, same as above: if the core never touched them the cache
++    * holds the right default (GL_BACK / GL_CCW), and it still has to be imposed,
++    * because nanovg may have changed them behind glsm's back. */
++   glCullFace(gl_state.cullface.mode);
+ 
+    if (gl_state.depthmask.used)
+       glDepthMask(gl_state.depthmask.mask);
+@@ -3194,8 +3228,7 @@ static void glsm_state_bind(void)
+          gl_state.viewport.w,
+          gl_state.viewport.h);
+ 
+-   if (gl_state.frontface.used)
+-      glFrontFace(gl_state.frontface.mode);
++   glFrontFace(gl_state.frontface.mode);
+ 
+    if (gl_state.stencilmask.used)
+       glStencilMask(gl_state.stencilmask.mask);
+@@ -3211,6 +3244,24 @@ static void glsm_state_bind(void)
+             gl_state.stencilfunc.ref,
+             gl_state.stencilfunc.mask);
+ 
++   /* baske: the same problem as the buffers, but for TEXTURES. rglBindTexture() elides
++    * redundant state too: it skips the real glBindTexture when its cache says that
++    * texture is already on the active unit. With the frontend sharing the context
++    * (nanovg binds ITS textures between frames, behind glsm's back), the cache lies
++    * and the core's textures are never bound -> missing textures, with no GL error at
++    * all.
++    * On top of that, this function restored ONE unit only -- the active one -- leaving
++    * the rest with whatever was there: which is why the driver warns that unit 2 holds
++    * texture 0. Every unit goes back from the cache, and only then is the right one
++    * left active. */
++   {
++      unsigned u;
++      for (u = 0; u < (unsigned)glsm_max_textures; u++)
++      {
++         glActiveTexture(GL_TEXTURE0 + u);
++         glBindTexture(gl_state.bind_textures.target[u], gl_state.bind_textures.ids[u]);
++      }
++   }
+    glActiveTexture(GL_TEXTURE0 + active_texture);
+    glBindTexture(gl_state.bind_textures.target[active_texture], gl_state.bind_textures.ids[active_texture]);
+ }
+diff --git a/switch/mman.h b/switch/mman.h
+index 6a5166e..2315d06 100644
+--- a/switch/mman.h
++++ b/switch/mman.h
+@@ -22,15 +22,21 @@ extern "C"
+ 
+ #define MAP_FAILED ((void *)-1)
+ void* ptr_rw = NULL;
++static VirtmemReservation* nxjit_rv = NULL;   // the virtual range reserved (new API)
+ 
++// maps the physical pages of `addr` (the core's jit_memory, in .text/RX) to a new RW
++// alias -> the dynarec writes through this one and executes through `addr`. Today's
++// libnx API (virtmemReserve was removed): virtmemLock + virtmemFindAslr + Reservation.
+ static inline void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
+ {
+-    (void)fd;
+-    (void)offset;
++    (void)prot; (void)flags; (void)fd; (void)offset;
+ 
+     size_t size = (len + 0xFFF) &~ 0xFFF;
+-	ptr_rw = virtmemReserve(size);
+-    if (R_SUCCEEDED(svcMapProcessMemory(ptr_rw, envGetOwnProcessHandle(), (u64)addr, size)))
++    virtmemLock();
++    ptr_rw   = virtmemFindAslr(size, 0);
++    nxjit_rv = ptr_rw ? virtmemAddReservation(ptr_rw, size) : NULL;
++    virtmemUnlock();
++    if (ptr_rw && R_SUCCEEDED(svcMapProcessMemory(ptr_rw, envGetOwnProcessHandle(), (u64)addr, size)))
+     {
+         return ptr_rw;
+     }
+@@ -43,6 +49,7 @@ static inline void *mmap(void *addr, size_t len, int prot, int flags, int fd, of
+ 
+ static inline int mprotect(void *addr, size_t len, int prot)
+ {
++    (void)addr; (void)len; (void)prot;
+     return 0;
+ }
+ 
+@@ -50,8 +57,9 @@ static inline int munmap(void *addr, size_t len)
+ {
+     size_t size = (len + 0xFFF) &~ 0xFFF;
+     svcUnmapProcessMemory(ptr_rw, envGetOwnProcessHandle(), (u64)addr, size);
++    if (nxjit_rv) { virtmemLock(); virtmemRemoveReservation(nxjit_rv); virtmemUnlock(); nxjit_rv = NULL; }
+     printf("[NXJIT]: Jit closed\n");
+-    
++
+     return 0;
+ }
+ 

@@ -1,0 +1,15 @@
+diff --git a/client/sock_impl.h b/client/sock_impl.h
+index 384c93f..bb9cbf2 100644
+--- a/client/sock_impl.h
++++ b/client/sock_impl.h
+@@ -3,7 +3,9 @@
+ 
+ #include <stdbool.h>
+ 
+-#if defined(__unix) || defined(__APPLE__) || defined(__PSP__)
++/* baske: on the Switch (bare-metal newlib) __unix is not defined, so this was never
++ * taken and struct sockaddr_in was left incomplete in postoffice_mem.h. */
++#if defined(__unix) || defined(__APPLE__) || defined(__PSP__) || defined(__SWITCH__)
+ #include <netinet/in.h>
+ #endif
+ 

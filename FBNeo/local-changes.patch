@@ -1,0 +1,24 @@
+diff --git a/src/burner/libretro/Makefile b/src/burner/libretro/Makefile
+index 35a4e4a6f..0b0ed87e6 100644
+--- a/src/burner/libretro/Makefile
++++ b/src/burner/libretro/Makefile
+@@ -306,7 +306,7 @@ else ifeq ($(platform), libnx)
+ 	TARGET := $(TARGET_NAME)_libretro_$(platform).$(EXT)
+ 	DEFINES := -DSWITCH=1 -U__linux__ -U__linux -DRARCH_INTERNAL
+ 	CFLAGS	:=	$(DEFINES) -g \
+-		-fPIE -I$(LIBNX)/include/ -ffunction-sections -fdata-sections -ftls-model=local-exec -Wl,--allow-multiple-definition -specs=$(LIBNX)/switch.specs
++		-fPIC -I$(LIBNX)/include/ -ffunction-sections -fdata-sections -ftls-model=local-exec -Wl,--allow-multiple-definition -specs=$(LIBNX)/switch.specs
+ 	CFLAGS += $(INCDIRS)
+ 	CFLAGS	+=	$(INCLUDE)  -D__SWITCH__ -DHAVE_LIBNX
+ 	CXXFLAGS := $(ASFLAGS) $(CFLAGS) -fno-rtti -std=gnu++11
+@@ -755,7 +755,9 @@ ifeq ($(STATIC_LINKING), 1)
+ ifeq ($(SPLIT_UP_LINK), 1)
+ 	$(AR) rcs $@ $(foreach OBJS,$(OBJS),$(NEWLINE) $(AR) q $@ $(OBJS))
+ else
+-	$(AR) rcs $@ $(OBJS)
++	$(file >$@.in,$(OBJS))
++	$(AR) rcs $@ @$@.in
++	@rm $@.in
+ endif
+ else
+ ifeq ($(SPLIT_UP_LINK), 1)
