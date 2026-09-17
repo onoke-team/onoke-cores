@@ -495,6 +495,36 @@
         "recipe": "make -C src/burner/libretro platform=win -j8",
         "output": "src/burner/libretro/fbneo_libretro.dll"
       }
+    },
+    {
+      "id": "dosbox_pure",
+      "name": "DOSBox Pure",
+      "systems": [
+        "DOS"
+      ],
+      "note": "Takes the whole game as a .zip and mounts it as drive C:, so nothing is installed and a game stays one file in the library. It is the only core here that wants the archive rather than the file inside it (see library/archive.hpp).",
+      "switch": {
+        "origin": "source",
+        "status": "untested",
+        "note": "Built and linked, never run on the console. Not published until someone has actually played on it.",
+        "repo": "https://github.com/schellingb/dosbox-pure.git",
+        "commit": "73e03aa145e0549ed4d5a20f8e65532714da33f5",
+        "date": "2026-09-15",
+        "dir": "extern/dosbox-pure",
+        "patches": [],
+        "recipe": "make -f switch-so.mk -j4",
+        "output": "dosbox_pure_libretro.so"
+      },
+      "windows": {
+        "origin": "source",
+        "repo": "https://github.com/schellingb/dosbox-pure.git",
+        "commit": "73e03aa145e0549ed4d5a20f8e65532714da33f5",
+        "date": "2026-09-15",
+        "dir": "extern/win/dosbox-pure",
+        "patches": [],
+        "recipe": "make platform=windows CXX=\"g++ -static\" -j8   # \"windows\", not \"win\" (that one assumes a cross compiler), and the flags go through CXX because overriding LDFLAGS on the command line also kills the -shared the Makefile adds with +=. Without -static the .dll pulls libstdc++-6 and libgcc_s_seh-1 from the build machine. Built from devkitPro's MSYS2 with /mingw64/bin on the PATH: its make is the one that handles these generated rules.",
+        "output": "dosbox_pure_libretro.dll"
+      }
     }
   ]
 }
