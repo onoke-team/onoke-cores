@@ -12,7 +12,7 @@ out, the source it came from is named here down to the commit.
 | core | systems | Switch | Windows |
 |---|---|:--:|:--:|
 | Azahar | Nintendo 3DS |  | yes |
-| DOSBox Pure | DOS |  | yes |
+| DOSBox Pure | DOS | yes | yes |
 | FinalBurn Neo | Arcade, Neo Geo, CPS1, CPS2, CPS3 | yes | yes |
 | FCEUmm | Nintendo Entertainment System, Famicom | yes | yes |
 | Flycast | Dreamcast, Naomi, Atomiswave | yes | yes |
